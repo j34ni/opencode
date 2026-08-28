@@ -6,7 +6,13 @@ import { ProxyUtil } from "../proxy-util"
 
 let embeddedUIPromise: Promise<Record<string, string> | null> | undefined
 
-export const UI_UPSTREAM = new URL("https://app.opencode.ai")
+export const UI_UPSTREAM = (() => {
+  const env = process.env.OPENCODE_UI_UPSTREAM
+  if (env) return new URL(env)
+  return new URL("https://app.opencode.ai")
+})()
+
+const DISK_UI_DIR = process.env.OPENCODE_UI_DIR ?? null
 
 export const csp = (hash = "") =>
   `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'${hash ? ` 'sha256-${hash}'` : ""}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; font-src 'self' data:; media-src 'self' data:; connect-src * data: blob:`
@@ -43,9 +49,20 @@ export function upstreamURL(path: string) {
 
 export function embeddedUI(disableEmbeddedWebUi: boolean) {
   if (disableEmbeddedWebUi) return Promise.resolve(null)
-  return (embeddedUIPromise ??=
-    // @ts-expect-error - generated file at build time
-    import("opencode-web-ui.gen.ts").then((module) => module.default as Record<string, string>).catch(() => null))
+  return (embeddedUIPromise ??= (async () => {
+    const result = await import("opencode-web-ui.gen.ts" as string).catch(() => null as null)
+    if (result) return result.default as Record<string, string>
+    if (!DISK_UI_DIR) return null
+    const glob = new Bun.Glob("**/*")
+    const files = (await Array.fromAsync(glob.scan({ cwd: DISK_UI_DIR })))
+      .map((f) => f.replaceAll("\\", "/"))
+      .filter((f) => !f.endsWith(".map"))
+    const entries: Record<string, string> = {}
+    for (const file of files) {
+      entries[file] = DISK_UI_DIR + "/" + file
+    }
+    return entries
+  })())
 }
 
 function notFound() {
